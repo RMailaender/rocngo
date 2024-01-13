@@ -15,17 +15,15 @@ main =
     args <- Arg.list |> Task.await
 
     when parseArgs (List.dropFirst args 1) is
-        Help ->
-            Stdout.line "Help!"
+        Help helpWith ->
+            helpText = cmdHelp helpWith
+            Stdout.line helpText
 
-        Invalid ->
-            Stdout.line "invalid"
-
-        CreateAppFile { platform, name, out } ->
+        CreateRocAppFile { platform, name, out } ->
             template =
                 when platform is
                     BasicCli -> basicCliTemplate name
-                    BasicWebserver -> "Not Implemented"
+                    BasicWebserver -> basicWebserverTemplate name
 
             when out is
                 Std ->
@@ -33,25 +31,34 @@ main =
 
                 File _ ->
                     Stdout.line "File output not implemented."
+# ============================================
+# Arguments
+# ============================================
 
-Platform : [
+AppCommands : [
+    Help HelpOptions,
+    CreateRocAppFile
+        {
+            platform : AppPlatform,
+            name : Str,
+            out : [
+                Std,
+                File Path.Path,
+            ],
+        },
+]
+
+AppPlatform : [
     BasicCli,
     BasicWebserver,
 ]
-parseArgs : List Str
-    -> [
-        Help,
-        Invalid,
-        CreateAppFile
-            {
-                platform : Platform,
-                name : Str,
-                out : [
-                    Std,
-                    File Path.Path,
-                ],
-            },
-    ]
+
+HelpOptions : [
+    ProgramHelp,
+    CreateRocAppFileHelp,
+]
+
+parseArgs : List Str -> AppCommands
 parseArgs = \args ->
     parseCreateAppParams = \platform, params ->
         when params is
@@ -65,44 +72,79 @@ parseArgs = \args ->
 
                 when file is
                     [name, "roc"] ->
-                        CreateAppFile {
+                        CreateRocAppFile {
                             platform,
                             name,
                             out: File (Path.fromStr path),
                         }
 
-                    _ -> Invalid
+                    _ -> Help ProgramHelp
 
             ["-o"] ->
-                Invalid
+                Help ProgramHelp
 
             [name] ->
-                CreateAppFile { platform, name, out: Std }
+                CreateRocAppFile { platform, name, out: Std }
 
             _ ->
-                Invalid
+                Help ProgramHelp
 
     when args is
-        [] | [""] ->
-            Help
+        [] | [""] | ["help"] | ["-h"] | ["--help"] ->
+            Help ProgramHelp
 
-        ["cli"] | ["basic-cli"] ->
+        ["cli"] | ["basic-cli"] | ["roc-lang/basic-cli"] ->
             parseCreateAppParams BasicCli ["main"]
 
-        ["cli", .. as tail] | ["basic-cli", .. as tail] ->
+        ["cli", .. as tail] | ["basic-cli", .. as tail] | ["roc-lang/basic-cli", .. as tail] ->
             parseCreateAppParams BasicCli tail
 
-        ["webserver"] | ["basic-webserver"] ->
+        ["webserver"] | ["basic-webserver"] | ["roc-lang/basic-webserver"] ->
             parseCreateAppParams BasicWebserver ["main"]
 
-        ["webserver", .. as tail] | ["basic-webserver", .. as tail] ->
+        ["webserver", .. as tail] | ["basic-webserver", .. as tail] | ["roc-lang/basic-webserver", .. as tail] ->
             parseCreateAppParams BasicWebserver tail
 
-        ["app"] ->
-            Help
-
+        # ["app"] ->
+        #     Help CreateRocAppFileHelp
         _ ->
-            Invalid
+            Help ProgramHelp
+
+cmdHelp : HelpOptions -> Str
+cmdHelp = \helpWith ->
+    when helpWith is
+        ProgramHelp ->
+            """
+            Hi, let me help you create new .roc files. I'll even inject the chosen platform for you.
+
+            Example:
+            As of now, I print the new file to stdout, so it's up to you to pipe it in the right destination. 
+
+                rng cli foo |> foo.roc
+
+
+            Command:
+                
+                rng [platform] [name]       Creates a new Roc App, with the chosen platform. 
+                                            [name] is optional btw. If you leave it empty, I chose \"main\" as the apps name.
+
+
+            Supported Platforms:
+                        
+                roc-lang/basic-cli          v0.7.1  Aliases: cli, basic-cli
+                roc-lang/basic-webserver    v0.1    Aliases: webserver, basic-webserver
+
+
+            Happy Building and Roc'n go!
+            """
+
+        CreateRocAppFileHelp ->
+            """
+            """
+
+# ============================================
+# roc app file
+# ============================================
 
 testPlatformsPath : Dict Str Str
 testPlatformsPath =
@@ -133,4 +175,35 @@ basicCliTemplate = \name ->
 
         Task.ok {}
     """
+
+basicWebserverTemplate : Str -> Str
+basicWebserverTemplate = \appName -> 
+    pf = Dict.get testPlatformsPath "basic-webserver" |> Result.withDefault "Ooops"
+
+    """
+    app \"\(appName)\"
+        packages { pf: 
+            \"\(pf)\" 
+        }
+        imports [
+            pf.Stdout,
+            pf.Task.{ Task },
+            pf.Http.{ Request, Response },
+            pf.Utc,
+        ]
+        provides [main] to pf
+
+    main : Request -> Task Response []
+    main = \\req ->
+
+        # Log request date, method and url
+        date <- Utc.now |> Task.map Utc.toIso8601Str |> Task.await
+        {} <- Stdout.line \"\\(date) \\(Http.methodToStr req.method) \\(req.url)\" |> Task.await
+
+        # Respond with request body
+        when req.body is
+            EmptyBody -> Task.ok { status: 200, headers: [], body: [] }
+            Body internal -> Task.ok { status: 200, headers: [], body: internal.body }
+    """
+
 
