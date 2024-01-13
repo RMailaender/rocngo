@@ -3,11 +3,9 @@ app "roc-n-go"
         pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br",
     }
     imports [
-        # pf.Stdout,
-        # pf.Stderr,
+        pf.Stdout,
         pf.Task.{ Task },
-        # pf.File,
-        # pf.Path,
+        pf.Path,
         pf.Arg,
     ]
     provides [main] to pf
@@ -16,167 +14,95 @@ main : Task {} I32
 main =
     args <- Arg.list |> Task.await
 
-    dbg args
+    when parseArgs (List.dropFirst args 1) is
+        Help ->
+            Stdout.line "Help!"
 
-    Task.ok {}
+        Invalid ->
+            Stdout.line "invalid"
 
-## -- Help
-##
-## > rng                        -> Help
-## > rng -h                     -> Help
-## > rng --help                 -> Help
+        CreateAppFile { platform, name, out } ->
+            template =
+                when platform is
+                    BasicCli -> basicCliTemplate name
+                    BasicWebserver -> "Not Implemented"
 
-## -- Help for a specific sub-cmd
-## > rng [cmd]                  -> Help
-## > rng -h [cmd]               -> Help
-## > rng --help [cmd]           -> Help [CMD]
+            when out is
+                Std ->
+                    Stdout.line template
 
-## -- CreateRocAppFile Sub Cmd
-##
-##
-## - CreateRocAppFile is the default Command, so it can be invoked directly
-##
-## > rng main                   -> CreateRocAppFile BasicCli "main"
-## > rng basic-cli main         -> CreateRocAppFile BasicCli "main"
-## > rng basic-webserver main   -> CreateRocAppFile BasicWebserver "main"
-##
-parseArgs : List Str -> _
-parseArgs = \args ->
-    parsePlatform = \str ->
-        when str is
-            "cli"
-            | "basic-cli" ->
-                Ok BasicCli
+                File _ ->
+                    Stdout.line "File output not implemented."
 
-            "webserver"
-            | "basic-webserver" ->
-                Ok BasicWebserver
-
-            _ ->
-                Err UnsupportedPlatform
-
-    parseCreateAppFileCmd : List Str -> Result _ _
-    parseCreateAppFileCmd = \cmdArgs ->
-        when cmdArgs is
-            ["app-file"] ->
-                Ok (CreateRocAppFile BasicCli)
-
-            ["app-file", maybePlatform] ->
-                when parsePlatform maybePlatform is
-                    Ok platform ->
-                        Ok (CreateRocAppFile platform)
-
-                    Err _ ->
-                        Ok (CreateRocAppFile HelpUnsupportedPlatform)
-
-            [maybePlatform] ->
-                when parsePlatform maybePlatform is
-                    Ok platform ->
-                        Ok (CreateRocAppFile platform)
-
-                    Err _ ->
-                        Err cmdArgs
-
-            _ ->
-                Err args
-
-    parseInitProjectCmd : List Str -> Result _ _
-    parseInitProjectCmd = \cmdArgs ->
-        when cmdArgs is
-            ["init"] ->
-                Ok (InitProject BasicCli)
-
-            ["init", maybePlatform] ->
-                when parsePlatform maybePlatform is
-                    Ok platform ->
-                        Ok (InitProject platform)
-
-                    Err _ ->
-                        Ok (InitProject HelpUnsupportedPlatform)
-
-            _ ->
-                Err cmdArgs
-
-    parseHelpCmd : List Str -> Result _ _
-    parseHelpCmd = \cmdArgs ->
-        when cmdArgs is
-            [] | [""] | ["help"] | ["-h"] | ["--help"] ->
-                Ok (Help Program)
-
-            _ ->
-                Err cmdArgs
-
-    args
-    |> parseCreateAppFileCmd
-    |> Result.onErr parseInitProjectCmd
-    |> Result.onErr parseHelpCmd
-    |> Result.withDefault (Help Program)
-
-# when args is
-#     [] | [""] ->
-#         Ok (CreateRocAppFile BasicCli)
-
-#     ["init"] ->
-#         Ok (InitProject BasicCli)
-
-#     ["init", maybePlatform] ->
-#         when parsePlatform maybePlatform is
-#             Ok platform -> Ok (InitProject platform)
-#             Err _ ->
-#                 Err UnsupportedPlatform
-
-#     [maybePlatform] ->
-#         when parsePlatform maybePlatform is
-#             Ok platform -> Ok (CreateRocAppFile platform)
-#             Err _ -> Err InvalidArgs
-
-#     _ ->
-#         Err InvalidArgs
-
-Platforms : [
-    BasicWebserver,
+Platform : [
     BasicCli,
+    BasicWebserver,
 ]
+parseArgs : List Str
+    -> [
+        Help,
+        Invalid,
+        CreateAppFile
+            {
+                platform : Platform,
+                name : Str,
+                out : [
+                    Std,
+                    File Path.Path,
+                ],
+            },
+    ]
+parseArgs = \args ->
+    parseCreateAppParams = \platform, params ->
+        when params is
+            ["-o", path] | ["--output", path] ->
+                file =
+                    path
+                    |> Str.split "/"
+                    |> List.last
+                    |> Result.map \s -> s |> Str.split "."
+                    |> Result.withDefault []
 
-# InitProject [Platform]
-expect
-    result =
-        [
-            (["init"], InitProject BasicCli),
-            (["init", "basic-cli"], InitProject BasicCli),
-            (["init", "basic-webserver"], InitProject BasicWebserver),
-            (["init", "foo-bar"], InitProject HelpUnsupportedPlatform),
-        ]
-        |> List.map \(args, expected) -> (parseArgs args, expected)
+                when file is
+                    [name, "roc"] ->
+                        CreateAppFile {
+                            platform,
+                            name,
+                            out: File (Path.fromStr path),
+                        }
 
-    List.all result \(actual, expected) -> actual == expected
+                    _ -> Invalid
 
-# help
-expect
-    result =
-        [
-            ([], Help Program),
-            ([""], Help Program),
-            (["foo-bar"], Help Program),
-        ]
-        |> List.map \(args, expected) -> (parseArgs args, expected)
+            ["-o"] ->
+                Invalid
 
-    List.all result \(actual, expected) -> actual == expected
+            [name] ->
+                CreateAppFile { platform, name, out: Std }
 
-# CreateRocAppFile
-expect
-    result =
-        [
-            (["basic-cli"], CreateRocAppFile BasicCli),
-            (["basic-webserver"], CreateRocAppFile BasicWebserver),
-            (["app-file"], CreateRocAppFile BasicCli),
-            (["app-file", "basic-cli"], CreateRocAppFile BasicCli),
-            (["app-file", "basic-webserver"], CreateRocAppFile BasicWebserver),
-            (["app-file", "foo-bar"], CreateRocAppFile HelpUnsupportedPlatform),
-        ]
-        |> List.map \(args, expected) -> (parseArgs args, expected)
+            _ ->
+                Invalid
 
-    List.all result \(actual, expected) -> actual == expected
+    when args is
+        [] | [""] ->
+            Help
+
+        ["cli"] | ["basic-cli"] ->
+            parseCreateAppParams BasicCli ["main"]
+
+        ["cli", .. as tail] | ["basic-cli", .. as tail] ->
+            parseCreateAppParams BasicCli tail
+
+        ["webserver"] | ["basic-webserver"] ->
+            parseCreateAppParams BasicWebserver ["main"]
+
+        ["webserver", .. as tail] | ["basic-webserver", .. as tail] ->
+            parseCreateAppParams BasicWebserver tail
+
+        ["app"] ->
+            Help
+
+        _ ->
+            Invalid
 
 testPlatformsPath : Dict Str Str
 testPlatformsPath =
@@ -186,43 +112,25 @@ testPlatformsPath =
     ]
     |> Dict.fromList
 
-Platform : {
-    key : Str,
-    paths : List Str,
-    template : Str,
-}
+basicCliTemplate : Str -> Str
+basicCliTemplate = \name ->
+    pf = Dict.get testPlatformsPath "basic-cli" |> Result.withDefault "oops"
 
-# f = basicCli "my-stuff"
-# result <- File.writeBytes (Path.fromStr "test-out/\(f.name)") f.body |> Task.attempt
+    """
+    app \"\(name)\"
+        packages {
+            pf: \"\(pf)\",
+        }
+        imports [
+            pf.Stdout,
+            pf.Task.{ Task },
+        ]
+        provides [main] to pf
 
-# when result is
-#     Err _ ->
-#         {} <- Stderr.line "Well that didn't work" |> Task.await
-#         Task.ok {}
+    main : Task {} I32
+    main =
+        {} <- Stdout.line \"there is nothing to see here yet.\" |> Task.await
 
-#     Ok {} ->
-#         {} <- Stdout.line "SUCCESS!!! -> Well it did work" |> Task.await
-#         Task.ok {}
+        Task.ok {}
+    """
 
-# basicCli : Str -> { name : Str, body : List U8 }
-# basicCli = \name -> {
-#     name: "\(name).roc",
-#     body: Str.toUtf8
-#         """
-#         app \"\(name)\"
-#             packages {
-#                 pf: \"https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br\",
-#             }
-#             imports [
-#                 pf.Stdout,
-#                 pf.Task.{ Task },
-#             ]
-#             provides [main] to pf
-
-#         main : Task {} I32
-#         main =
-#             {} <- Stdout.line \"there is nothing to see here yet.\" |> Task.await
-
-#             Task.ok {}
-#         """,
-# }
